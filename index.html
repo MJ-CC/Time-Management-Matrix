@@ -1,0 +1,1524 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>時間矩陣待辦事項 | Eisenhower Time Matrix</title>
+  <meta name="description" content="基於艾森豪威爾四象限法則的即時同步時間矩陣待辦事項網頁應用程式，支援拖曳分類、行內編輯與 Firebase 匿名登入雲端同步。" />
+  <meta property="og:title" content="時間矩陣待辦事項 | Eisenhower Time Matrix" />
+  <meta property="og:description" content="基於艾森豪威爾四象限法則的即時同步時間矩陣待辦事項網頁應用程式，支援拖曳分類、行內編輯與 Firebase 匿名登入雲端同步。" />
+  <meta property="og:type" content="website" />
+
+  <!-- Google Fonts: Plus Jakarta Sans + Noto Sans TC + JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', '"Noto Sans TC"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* 清爽現代的自訂捲動條樣式 */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background-color: rgba(148, 163, 184, 0.4);
+      border-radius: 9999px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(100, 116, 139, 0.65);
+    }
+    .custom-scrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+    }
+
+    /* 拖曳中的任務卡片樣式 */
+    .task-card[draggable="true"] {
+      cursor: grab;
+    }
+    .task-card[draggable="true"]:active {
+      cursor: grabbing;
+    }
+    .task-card.is-dragging {
+      opacity: 0.42;
+      transform: scale(0.985);
+    }
+
+    /* 減少動態效果偏好支援 */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased selection:bg-slate-900 selection:text-white">
+  <div id="app" class="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col">
+    <!-- 頂部工作列 -->
+    <header class="shrink-0 bg-white border-b border-slate-200 px-4 sm:px-6 py-3.5">
+      <div class="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center shrink-0">
+            <i data-lucide="layout-grid" class="w-4 h-4"></i>
+          </div>
+          <div class="min-w-0">
+            <h1 class="text-base sm:text-lg font-bold tracking-tight text-slate-900 truncate">
+              時間矩陣待辦事項
+            </h1>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-4 text-xs sm:text-sm text-slate-500 shrink-0">
+          <span id="total-count-label" class="font-mono tabular-nums whitespace-nowrap">
+            共 0 項任務
+          </span>
+          <span aria-hidden="true" class="text-slate-300 hidden sm:inline">·</span>
+          <span class="hidden sm:inline whitespace-nowrap text-slate-500">
+            點擊標題可編輯，拖曳卡片至象限分類
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 錯誤 / 設定診斷提示橫幅（預設隱藏，發生認證或 Firestore 錯誤時顯示） -->
+    <div id="error-banner" class="hidden shrink-0 bg-rose-50 border-b border-rose-200 px-4 sm:px-6 py-3" role="alert">
+      <div class="max-w-[1600px] mx-auto flex items-start justify-between gap-3">
+        <div class="flex items-start gap-2.5 min-w-0">
+          <i data-lucide="alert-triangle" class="w-4 h-4 text-rose-600 shrink-0 mt-0.5"></i>
+          <div class="text-xs sm:text-sm text-rose-900 space-y-0.5 min-w-0">
+            <p class="font-semibold flex flex-wrap items-center gap-x-2">
+              <span id="error-title">連線或權限發生錯誤</span>
+              <span id="error-code" class="font-mono text-xs text-rose-700"></span>
+            </p>
+            <p id="error-message" class="text-rose-800 break-words"></p>
+            <p id="error-hint" class="text-xs text-rose-700/90"></p>
+          </div>
+        </div>
+        <button
+          id="dismiss-error-btn"
+          type="button"
+          class="p-1.5 rounded-md text-rose-600 hover:text-rose-900 hover:bg-rose-100 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+          aria-label="關閉錯誤提示"
+        >
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- 主工作區：桌面版左側 2/3 四象限時間矩陣 + 右側 1/3 待辦事項暫存區 -->
+    <main class="flex-1 min-h-0 max-w-[1600px] w-full mx-auto p-4 sm:p-5 lg:p-6">
+      <div class="h-full grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5">
+        <!-- 左側 2/3：四象限時間矩陣 -->
+        <section
+          aria-label="四象限時間矩陣"
+          class="lg:col-span-8 min-h-0 grid grid-cols-1 md:grid-cols-2 md:grid-rows-2 gap-4"
+        >
+          <!-- Q1：乾燥玫瑰紅 -->
+          <div
+            data-quadrant="Q1"
+            class="dropzone flex flex-col min-h-[260px] lg:min-h-0 bg-[#F9EDED] border border-[#E6C2C2] rounded-xl overflow-hidden transition-all duration-150"
+          >
+            <div class="shrink-0 px-4 py-3 bg-[#F3DCDC] border-b border-[#E6C2C2] flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span data-label-quadrant="Q1" data-label-field="code" tabindex="0" role="button" title="點擊編輯象限代號" class="font-mono text-xs font-semibold text-[#9E2A2B] shrink-0 cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E2A2B]/40 transition-colors">Q1</span>
+                <span aria-hidden="true" class="text-[#9E2A2B]/40">/</span>
+                <h2 data-label-quadrant="Q1" data-label-field="title" tabindex="0" role="button" title="點擊編輯象限名稱" class="text-sm font-semibold text-[#9E2A2B] truncate cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E2A2B]/40 transition-colors">緊急 &amp; 重要</h2>
+              </div>
+              <div class="flex items-center gap-2 shrink-0 text-xs">
+                <span data-label-quadrant="Q1" data-label-field="action" tabindex="0" role="button" title="點擊編輯行動提示" class="text-[#9E2A2B] font-medium whitespace-nowrap cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E2A2B]/40 transition-colors">立刻做</span>
+                <span aria-hidden="true" class="text-[#9E2A2B]/40">·</span>
+                <span id="count-Q1" class="font-mono tabular-nums text-[#9E2A2B]/80">0</span>
+              </div>
+            </div>
+            <div
+              id="list-Q1"
+              data-list-quadrant="Q1"
+              class="flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-[#F9EDED] p-3 space-y-2"
+            ></div>
+          </div>
+
+          <!-- Q2：鼠尾草綠 -->
+          <div
+            data-quadrant="Q2"
+            class="dropzone flex flex-col min-h-[260px] lg:min-h-0 bg-[#EBF5F0] border border-[#BFE0D0] rounded-xl overflow-hidden transition-all duration-150"
+          >
+            <div class="shrink-0 px-4 py-3 bg-[#DCECE4] border-b border-[#BFE0D0] flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span data-label-quadrant="Q2" data-label-field="code" tabindex="0" role="button" title="點擊編輯象限代號" class="font-mono text-xs font-semibold text-[#1B6B50] shrink-0 cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1B6B50]/40 transition-colors">Q2</span>
+                <span aria-hidden="true" class="text-[#1B6B50]/40">/</span>
+                <h2 data-label-quadrant="Q2" data-label-field="title" tabindex="0" role="button" title="點擊編輯象限名稱" class="text-sm font-semibold text-[#1B6B50] truncate cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1B6B50]/40 transition-colors">不緊急 &amp; 重要</h2>
+              </div>
+              <div class="flex items-center gap-2 shrink-0 text-xs">
+                <span data-label-quadrant="Q2" data-label-field="action" tabindex="0" role="button" title="點擊編輯行動提示" class="text-[#1B6B50] font-medium whitespace-nowrap cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1B6B50]/40 transition-colors">排程做</span>
+                <span aria-hidden="true" class="text-[#1B6B50]/40">·</span>
+                <span id="count-Q2" class="font-mono tabular-nums text-[#1B6B50]/80">0</span>
+              </div>
+            </div>
+            <div
+              id="list-Q2"
+              data-list-quadrant="Q2"
+              class="flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-[#EBF5F0] p-3 space-y-2"
+            ></div>
+          </div>
+
+          <!-- Q3：燕麥暖黃 -->
+          <div
+            data-quadrant="Q3"
+            class="dropzone flex flex-col min-h-[260px] lg:min-h-0 bg-[#FAF3E3] border border-[#E6D09E] rounded-xl overflow-hidden transition-all duration-150"
+          >
+            <div class="shrink-0 px-4 py-3 bg-[#F4E7C8] border-b border-[#E6D09E] flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span data-label-quadrant="Q3" data-label-field="code" tabindex="0" role="button" title="點擊編輯象限代號" class="font-mono text-xs font-semibold text-[#9A6700] shrink-0 cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9A6700]/40 transition-colors">Q3</span>
+                <span aria-hidden="true" class="text-[#9A6700]/40">/</span>
+                <h2 data-label-quadrant="Q3" data-label-field="title" tabindex="0" role="button" title="點擊編輯象限名稱" class="text-sm font-semibold text-[#9A6700] truncate cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9A6700]/40 transition-colors">緊急 &amp; 不重要</h2>
+              </div>
+              <div class="flex items-center gap-2 shrink-0 text-xs">
+                <span data-label-quadrant="Q3" data-label-field="action" tabindex="0" role="button" title="點擊編輯行動提示" class="text-[#9A6700] font-medium whitespace-nowrap cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9A6700]/40 transition-colors">委派做</span>
+                <span aria-hidden="true" class="text-[#9A6700]/40">·</span>
+                <span id="count-Q3" class="font-mono tabular-nums text-[#9A6700]/80">0</span>
+              </div>
+            </div>
+            <div
+              id="list-Q3"
+              data-list-quadrant="Q3"
+              class="flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-[#FAF3E3] p-3 space-y-2"
+            ></div>
+          </div>
+
+          <!-- Q4：霧霾藍 -->
+          <div
+            data-quadrant="Q4"
+            class="dropzone flex flex-col min-h-[260px] lg:min-h-0 bg-[#EBF2F7] border border-[#BDD4E7] rounded-xl overflow-hidden transition-all duration-150"
+          >
+            <div class="shrink-0 px-4 py-3 bg-[#DCE8F2] border-b border-[#BDD4E7] flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span data-label-quadrant="Q4" data-label-field="code" tabindex="0" role="button" title="點擊編輯象限代號" class="font-mono text-xs font-semibold text-[#1D5B8C] shrink-0 cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5B8C]/40 transition-colors">Q4</span>
+                <span aria-hidden="true" class="text-[#1D5B8C]/40">/</span>
+                <h2 data-label-quadrant="Q4" data-label-field="title" tabindex="0" role="button" title="點擊編輯象限名稱" class="text-sm font-semibold text-[#1D5B8C] truncate cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5B8C]/40 transition-colors">不緊急 &amp; 不重要</h2>
+              </div>
+              <div class="flex items-center gap-2 shrink-0 text-xs">
+                <span data-label-quadrant="Q4" data-label-field="action" tabindex="0" role="button" title="點擊編輯行動提示" class="text-[#1D5B8C] font-medium whitespace-nowrap cursor-pointer rounded px-1 -mx-1 py-0.5 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D5B8C]/40 transition-colors">刪除 / 少做</span>
+                <span aria-hidden="true" class="text-[#1D5B8C]/40">·</span>
+                <span id="count-Q4" class="font-mono tabular-nums text-[#1D5B8C]/80">0</span>
+              </div>
+            </div>
+            <div
+              id="list-Q4"
+              data-list-quadrant="Q4"
+              class="flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-[#EBF2F7] p-3 space-y-2"
+            ></div>
+          </div>
+        </section>
+
+        <!-- 右側 1/3：待辦事項暫存區 (staging) -->
+        <aside
+          aria-label="待辦事項暫存區"
+          data-quadrant="staging"
+          class="dropzone lg:col-span-4 flex flex-col min-h-[380px] lg:min-h-0 bg-white border border-slate-200 rounded-xl overflow-hidden transition-all duration-150"
+        >
+          <!-- 暫存區頂部標題與新增按鈕 -->
+          <div class="shrink-0 px-4 py-3.5 border-b border-slate-200 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2 min-w-0">
+              <i data-lucide="inbox" class="w-4 h-4 text-slate-600 shrink-0"></i>
+              <h2 class="text-sm font-semibold text-slate-900 truncate">待辦事項暫存區</h2>
+              <span aria-hidden="true" class="text-slate-300">·</span>
+              <span id="count-staging" class="font-mono tabular-nums text-xs text-slate-500">0</span>
+            </div>
+
+            <button
+              id="open-add-form-btn"
+              type="button"
+              disabled
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-1"
+            >
+              <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+              <span>新增待辦事項</span>
+            </button>
+          </div>
+
+          <!-- 暫存區上方：新增任務輸入框（獨立於任務清單容器，不受 onSnapshot 重繪影響） -->
+          <form
+            id="add-task-form"
+            class="hidden shrink-0 px-4 py-3 bg-slate-50/90 border-b border-slate-200 space-y-2.5"
+          >
+            <label for="new-task-input" class="sr-only">輸入待辦事項內容</label>
+            <input
+              id="new-task-input"
+              type="text"
+              maxlength="200"
+              autocomplete="off"
+              placeholder="輸入待辦事項標題，按 Enter 儲存..."
+              class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10 transition-colors"
+            />
+            <div class="flex items-center justify-end gap-2">
+              <button
+                id="cancel-add-btn"
+                type="button"
+                class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-200/70 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+              >
+                取消
+              </button>
+              <button
+                id="confirm-add-btn"
+                type="submit"
+                class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+              >
+                確定新增
+              </button>
+            </div>
+          </form>
+
+          <!-- 暫存區任務清單 -->
+          <div
+            id="list-staging"
+            data-list-quadrant="staging"
+            class="flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-slate-50/40 p-3 space-y-2"
+          ></div>
+
+          <!-- 暫存區底部：用戶 ID 與連線狀態列 -->
+          <div class="shrink-0 px-4 py-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 text-xs text-slate-500">
+            <div id="connection-status" class="flex items-center gap-1.5 min-w-0">
+              <i id="status-icon" data-lucide="loader-2" class="w-3.5 h-3.5 text-slate-400 animate-spin shrink-0"></i>
+              <span id="status-text" class="truncate">正在驗證匿名登入...</span>
+            </div>
+
+            <div class="flex items-center gap-1.5 shrink-0">
+              <span class="text-slate-400 whitespace-nowrap">用戶ID:</span>
+              <code id="user-id-display" class="font-mono text-slate-700 max-w-[118px] truncate" title="">未登入</code>
+              <button
+                id="copy-uid-btn"
+                type="button"
+                class="hidden p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                aria-label="複製用戶 ID"
+                title="複製完整用戶 ID"
+              >
+                <i data-lucide="copy" class="w-3 h-3"></i>
+              </button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    // =========================================================================
+    // 1. MANUAL_FIREBASE_CONFIG（部署於 GitHub Pages 等外部環境時請填入此區塊）
+    // =========================================================================
+    const MANUAL_FIREBASE_CONFIG = {
+      apiKey: "",
+      authDomain: "",
+      projectId: "",
+      storageBucket: "",
+      messagingSenderId: "",
+      appId: ""
+    };
+
+    const DEFAULT_APP_ID = "time-matrix-prod";
+
+    // =========================================================================
+    // 2. Firebase JS SDK (v11.x ESM CDN)
+    // =========================================================================
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+    import {
+      getAuth,
+      signInAnonymously,
+      signInWithCustomToken,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+    import {
+      getFirestore,
+      collection,
+      doc,
+      addDoc,
+      updateDoc,
+      deleteDoc,
+      onSnapshot,
+      query,
+      orderBy,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
+    // =========================================================================
+    // 3. 象限設定與狀態管理
+    // =========================================================================
+    const QUADRANT_META = {
+      Q1: {
+        cardClasses: "bg-[#F9EDED] border-[#E6C2C2] hover:bg-[#F3DCDC]/50 hover:border-[#9E2A2B]/40",
+        gripClasses: "text-[#9E2A2B]/40 group-hover:text-[#9E2A2B]/70",
+        titleHoverClasses: "hover:bg-[#F3DCDC]/70",
+        dropHighlightClasses: ["ring-2", "ring-[#9E2A2B]/50"],
+      },
+      Q2: {
+        cardClasses: "bg-[#EBF5F0] border-[#BFE0D0] hover:bg-[#DCECE4]/50 hover:border-[#1B6B50]/40",
+        gripClasses: "text-[#1B6B50]/40 group-hover:text-[#1B6B50]/70",
+        titleHoverClasses: "hover:bg-[#DCECE4]/70",
+        dropHighlightClasses: ["ring-2", "ring-[#1B6B50]/50"],
+      },
+      Q3: {
+        cardClasses: "bg-[#FAF3E3] border-[#E6D09E] hover:bg-[#F4E7C8]/50 hover:border-[#9A6700]/40",
+        gripClasses: "text-[#9A6700]/40 group-hover:text-[#9A6700]/70",
+        titleHoverClasses: "hover:bg-[#F4E7C8]/70",
+        dropHighlightClasses: ["ring-2", "ring-[#9A6700]/50"],
+      },
+      Q4: {
+        cardClasses: "bg-[#EBF2F7] border-[#BDD4E7] hover:bg-[#DCE8F2]/50 hover:border-[#1D5B8C]/40",
+        gripClasses: "text-[#1D5B8C]/40 group-hover:text-[#1D5B8C]/70",
+        titleHoverClasses: "hover:bg-[#DCE8F2]/70",
+        dropHighlightClasses: ["ring-2", "ring-[#1D5B8C]/50"],
+      },
+      staging: {
+        cardClasses: "bg-slate-50 border-slate-200/90 hover:border-slate-300",
+        gripClasses: "text-slate-300 group-hover:text-slate-400",
+        titleHoverClasses: "hover:bg-slate-100/80",
+        emptyTitle: "暫存區目前沒有待辦事項",
+        emptyHint: "點擊上方「新增待辦事項」建立任務，再拖曳至左側象限規劃優先順序",
+        dropHighlightClasses: ["ring-2", "ring-slate-400", "bg-slate-50/60"],
+      },
+    };
+
+    const VALID_QUADRANTS = new Set(["Q1", "Q2", "Q3", "Q4", "staging"]);
+    const LOCAL_STORAGE_KEY = "eisenhower_time_matrix_tasks_v1";
+    const QUADRANT_LABELS_STORAGE_KEY = "eisenhower_quadrant_labels_v1";
+
+    const DEFAULT_QUADRANT_LABELS = {
+      Q1: { code: "Q1", title: "緊急 & 重要", action: "立刻做" },
+      Q2: { code: "Q2", title: "不緊急 & 重要", action: "排程做" },
+      Q3: { code: "Q3", title: "緊急 & 不重要", action: "委派做" },
+      Q4: { code: "Q4", title: "不緊急 & 不重要", action: "刪除 / 少做" },
+    };
+
+    const state = {
+      storageMode: "local",   // "local" | "firebase"
+      db: null,
+      auth: null,
+      appId: DEFAULT_APP_ID,
+      user: null,
+      isAuthReady: false,
+      isLoadingTasks: true,
+      unsubscribeSnapshot: null,
+      tasks: [],              // 依 createdAt 由舊到新排序
+      quadrantLabels: structuredClone(DEFAULT_QUADRANT_LABELS),
+      editingTaskId: null,    // 當前正在行內編輯的任務 ID
+      draggingTaskId: null,   // 當前正在拖曳的任務 ID
+      pendingRender: false,   // 若拖曳期間收到快照，延後至 dragend 再更新
+      dragCounters: new Map() // 防止拖曳經過子元素造成閃爍
+    };
+
+    function isAppReady() {
+      if (state.storageMode === "local") {
+        return state.isAuthReady;
+      }
+      return state.isAuthReady && Boolean(state.user);
+    }
+
+    // =========================================================================
+    // 4. DOM 元素參照
+    // =========================================================================
+    const els = {
+      totalCountLabel: document.getElementById("total-count-label"),
+      errorBanner: document.getElementById("error-banner"),
+      errorTitle: document.getElementById("error-title"),
+      errorCode: document.getElementById("error-code"),
+      errorMessage: document.getElementById("error-message"),
+      errorHint: document.getElementById("error-hint"),
+      dismissErrorBtn: document.getElementById("dismiss-error-btn"),
+
+      openAddFormBtn: document.getElementById("open-add-form-btn"),
+      addTaskForm: document.getElementById("add-task-form"),
+      newTaskInput: document.getElementById("new-task-input"),
+      cancelAddBtn: document.getElementById("cancel-add-btn"),
+      confirmAddBtn: document.getElementById("confirm-add-btn"),
+
+      connectionStatus: document.getElementById("connection-status"),
+      statusText: document.getElementById("status-text"),
+      userIdDisplay: document.getElementById("user-id-display"),
+      copyUidBtn: document.getElementById("copy-uid-btn"),
+
+      lists: {
+        Q1: document.getElementById("list-Q1"),
+        Q2: document.getElementById("list-Q2"),
+        Q3: document.getElementById("list-Q3"),
+        Q4: document.getElementById("list-Q4"),
+        staging: document.getElementById("list-staging"),
+      },
+      counts: {
+        Q1: document.getElementById("count-Q1"),
+        Q2: document.getElementById("count-Q2"),
+        Q3: document.getElementById("count-Q3"),
+        Q4: document.getElementById("count-Q4"),
+        staging: document.getElementById("count-staging"),
+      },
+      dropzones: Array.from(document.querySelectorAll(".dropzone")),
+    };
+
+    // =========================================================================
+    // 5. 圖示與狀態提示工具
+    // =========================================================================
+    function refreshIcons(root = document) {
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons({ root });
+      }
+    }
+
+    function setConnectionStatus(type, text) {
+      const iconMap = {
+        loading: { name: "loader-2", cls: "w-3.5 h-3.5 text-slate-400 animate-spin shrink-0" },
+        connected: { name: "check-circle-2", cls: "w-3.5 h-3.5 text-emerald-600 shrink-0" },
+        local: { name: "hard-drive", cls: "w-3.5 h-3.5 text-emerald-600 shrink-0" },
+        warning: { name: "alert-circle", cls: "w-3.5 h-3.5 text-amber-600 shrink-0" },
+        error: { name: "shield-alert", cls: "w-3.5 h-3.5 text-rose-600 shrink-0" },
+      };
+      const cfg = iconMap[type] || iconMap.loading;
+
+      const oldIcon = els.connectionStatus.querySelector("i, svg");
+      const newIcon = document.createElement("i");
+      newIcon.setAttribute("data-lucide", cfg.name);
+      newIcon.className = cfg.cls;
+      if (oldIcon) {
+        oldIcon.replaceWith(newIcon);
+      } else {
+        els.connectionStatus.prepend(newIcon);
+      }
+
+      els.statusText.textContent = text;
+      refreshIcons(els.connectionStatus);
+    }
+
+    function getTroubleshootingHint(code, fallbackMessage = "") {
+      const hints = {
+        "LOCAL_STORAGE_ERROR": "瀏覽器可能停用了本機儲存空間（如無痕模式或隱私設定限制），請檢查瀏覽器權限。",
+        "QuotaExceededError": "瀏覽器 localStorage 儲存空間已滿，請刪除部分舊任務或清理網站資料。",
+        "auth/operation-not-allowed": "請前往 Firebase Console → Authentication → Sign-in method，啟用「匿名（Anonymous）」登入方式。",
+        "auth/api-key-not-valid": "請檢查 MANUAL_FIREBASE_CONFIG 中的 apiKey 是否正確，或確認 API 金鑰沒有受到網域限制阻擋。",
+        "auth/unauthorized-domain": "請前往 Firebase Console → Authentication → Settings → Authorized domains，將目前網域加入允許清單。",
+        "auth/network-request-failed": "網路連線失敗，請檢查網路狀態或防火牆設定後重新整理頁面。",
+        "permission-denied": "Firestore 權限不足：請確認 Firestore 安全規則允許已登入使用者讀寫 artifacts/{appId}/users/{request.auth.uid}/time_matrix_tasks。",
+        "unavailable": "目前無法連線至 Firestore 服務，請確認網路連線或 Firebase 專案狀態。",
+      };
+      if (code && hints[code]) return hints[code];
+      if (fallbackMessage.includes("Missing or insufficient permissions")) {
+        return hints["permission-denied"];
+      }
+      return "請開啟瀏覽器開發者工具 Console 查看詳細記錄，並確認環境設定與權限。";
+    }
+
+    function showError(title, errorOrCode, customHint) {
+      const code =
+        typeof errorOrCode === "string"
+          ? errorOrCode
+          : errorOrCode?.code || "unknown-error";
+      const message =
+        typeof errorOrCode === "string"
+          ? ""
+          : errorOrCode?.message || String(errorOrCode || "未知錯誤");
+
+      els.errorTitle.textContent = title;
+      els.errorCode.textContent = code ? `[${code}]` : "";
+      els.errorMessage.textContent = message;
+      els.errorHint.textContent = customHint || getTroubleshootingHint(code, message);
+      els.errorBanner.classList.remove("hidden");
+      refreshIcons(els.errorBanner);
+    }
+
+    function hideError() {
+      els.errorBanner.classList.add("hidden");
+    }
+
+    function setInteractiveEnabled(enabled) {
+      els.openAddFormBtn.disabled = !enabled;
+      if (!enabled) {
+        closeAddForm();
+      }
+    }
+
+    // =========================================================================
+    // 6. Firestore 集合與時間戳記處理
+    // =========================================================================
+    function getTasksCollectionRef() {
+      return collection(
+        state.db,
+        "artifacts",
+        state.appId,
+        "users",
+        state.user.uid,
+        "time_matrix_tasks"
+      );
+    }
+
+    function getTaskDocRef(taskId) {
+      return doc(
+        state.db,
+        "artifacts",
+        state.appId,
+        "users",
+        state.user.uid,
+        "time_matrix_tasks",
+        taskId
+      );
+    }
+
+    function getCreatedAtMs(task) {
+      const ts = task.createdAt;
+      if (!ts) return Number.MAX_SAFE_INTEGER;
+      if (typeof ts.toMillis === "function") return ts.toMillis();
+      if (typeof ts.seconds === "number") return ts.seconds * 1000 + Math.floor((ts.nanoseconds || 0) / 1e6);
+      if (ts instanceof Date) return ts.getTime();
+      if (typeof ts === "number") return ts;
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    // =========================================================================
+    // 7. 渲染邏輯（確保不破壞正在編輯的輸入框或進行中的拖曳）
+    // =========================================================================
+    function createEmptyStateElement(quadrant) {
+      const meta = QUADRANT_META[quadrant];
+      const wrapper = document.createElement("div");
+      wrapper.className = "h-full min-h-[140px] flex flex-col items-center justify-center text-center px-4 py-6 text-slate-400 select-none";
+
+      if (state.isLoadingTasks && state.isAuthReady) {
+        wrapper.innerHTML = `
+          <i data-lucide="loader-2" class="w-5 h-5 mb-2 text-slate-300 animate-spin"></i>
+          <p class="text-xs font-medium text-slate-400">載入任務中...</p>
+        `;
+        return wrapper;
+      }
+
+      const hasText = Boolean(meta.emptyTitle || meta.emptyHint);
+      const iconName = quadrant === "staging" ? "inbox" : "arrow-down-to-dot";
+      const iconEl = document.createElement("i");
+      iconEl.setAttribute("data-lucide", iconName);
+      iconEl.className = hasText
+        ? "w-5 h-5 mb-2 text-slate-300"
+        : "w-5 h-5 text-slate-300";
+
+      wrapper.appendChild(iconEl);
+
+      if (meta.emptyTitle) {
+        const titleEl = document.createElement("p");
+        titleEl.className = "text-xs font-medium text-slate-500";
+        titleEl.textContent = meta.emptyTitle;
+        wrapper.appendChild(titleEl);
+      }
+
+      if (meta.emptyHint) {
+        const hintEl = document.createElement("p");
+        hintEl.className = "text-[11px] text-slate-400 mt-1 max-w-[240px] leading-relaxed";
+        hintEl.textContent = meta.emptyHint;
+        wrapper.appendChild(hintEl);
+      }
+
+      return wrapper;
+    }
+
+    function createTaskCardElement(task) {
+      const canInteract = isAppReady();
+      const isEditing = state.editingTaskId === task.id;
+      const meta = QUADRANT_META[task.quadrant] || QUADRANT_META.staging;
+
+      const card = document.createElement("div");
+      card.className =
+        `task-card group flex items-start gap-2.5 ${meta.cardClasses} border rounded-lg px-3 py-2.5 shadow-sm hover:shadow transition-all duration-150`;
+      card.dataset.taskId = task.id;
+      card.dataset.quadrant = task.quadrant;
+      card.draggable = canInteract && !isEditing;
+
+      // 拖曳握把提示圖示
+      const gripWrap = document.createElement("span");
+      gripWrap.className = `mt-0.5 ${meta.gripClasses} shrink-0 select-none`;
+      gripWrap.setAttribute("aria-hidden", "true");
+      const gripIcon = document.createElement("i");
+      gripIcon.setAttribute("data-lucide", "grip-vertical");
+      gripIcon.className = "w-3.5 h-3.5";
+      gripWrap.appendChild(gripIcon);
+
+      // 中央內容區：標題顯示或行內編輯輸入框
+      const body = document.createElement("div");
+      body.className = "flex-1 min-w-0";
+
+      if (isEditing) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.maxLength = 200;
+        input.value = task.title;
+        input.dataset.editInputFor = task.id;
+        input.className =
+          "w-full px-2 py-0.5 -mx-2 -my-0.5 text-sm text-slate-900 bg-white border border-slate-400 rounded focus:outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10";
+        input.setAttribute("aria-label", "編輯任務標題");
+
+        let isFinished = false;
+        const commitEdit = async (shouldSave) => {
+          if (isFinished) return;
+          isFinished = true;
+
+          const trimmed = input.value.trim();
+          state.editingTaskId = null;
+
+          if (!shouldSave || !trimmed || trimmed === task.title) {
+            // 若清空或取消或未修改，直接還原顯示原標題
+            renderAll();
+            return;
+          }
+
+          await handleUpdateTaskTitle(task.id, trimmed);
+        };
+
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commitEdit(true);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            commitEdit(false);
+          }
+        });
+
+        input.addEventListener("blur", () => {
+          commitEdit(true);
+        });
+
+        body.appendChild(input);
+      } else {
+        const titleEl = document.createElement("div");
+        if (canInteract) {
+          titleEl.setAttribute("role", "button");
+          titleEl.tabIndex = 0;
+        }
+        titleEl.className =
+          `w-full text-left text-sm text-[#2B2D42] leading-snug break-words select-none rounded px-1 -mx-1 py-0.5 ${canInteract ? meta.titleHoverClasses : ""} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/20 transition-colors`;
+        titleEl.textContent = task.title;
+        titleEl.title = canInteract ? "點兩下以編輯標題" : "";
+
+        // 鍵盤 Enter / Space 支援開啟編輯；滑鼠透過卡片點兩下 (dblclick) 觸發
+        titleEl.addEventListener("keydown", (e) => {
+          if (!isAppReady()) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            startInlineEdit(task.id);
+          }
+        });
+
+        body.appendChild(titleEl);
+      }
+
+      // 刪除按鈕
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.disabled = !canInteract;
+      deleteBtn.dataset.action = "delete";
+      deleteBtn.className =
+        "shrink-0 p-1 -mr-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 transition-all duration-150 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500";
+      deleteBtn.setAttribute("aria-label", `刪除任務：${task.title}`);
+      deleteBtn.title = "刪除任務";
+
+      const trashIcon = document.createElement("i");
+      trashIcon.setAttribute("data-lucide", "trash-2");
+      trashIcon.className = "w-3.5 h-3.5";
+      deleteBtn.appendChild(trashIcon);
+
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await handleDeleteTask(task.id);
+      });
+      deleteBtn.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+      });
+
+      // 點兩下整張卡片即可修改標題
+      card.addEventListener("dblclick", (e) => {
+        if (!canInteract || state.editingTaskId === task.id) return;
+        if (e.target.closest('[data-action="delete"]')) return;
+        e.stopPropagation();
+        startInlineEdit(task.id);
+      });
+
+      // 拖曳事件
+      card.addEventListener("dragstart", (e) => {
+        if (!canInteract) {
+          e.preventDefault();
+          return;
+        }
+        if (state.editingTaskId === task.id) {
+          const activeInput = card.querySelector(`input[data-edit-input-for="${CSS.escape(task.id)}"]`);
+          if (activeInput) {
+            e.preventDefault();
+            return;
+          }
+          state.editingTaskId = null;
+        }
+        state.draggingTaskId = task.id;
+        card.classList.add("is-dragging");
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", task.id);
+        }
+      });
+
+      card.addEventListener("dragend", () => {
+        card.classList.remove("is-dragging");
+        state.draggingTaskId = null;
+        clearAllDropHighlights();
+
+        if (state.pendingRender) {
+          state.pendingRender = false;
+          renderAll();
+        }
+      });
+
+      card.append(gripWrap, body, deleteBtn);
+      return card;
+    }
+
+    function startInlineEdit(taskId) {
+      state.editingTaskId = taskId;
+      renderAll();
+
+      // 聚焦並選取剛建立的編輯輸入框
+      const input = document.querySelector(`input[data-edit-input-for="${CSS.escape(taskId)}"]`);
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }
+
+    function renderZone(quadrant, zoneTasks) {
+      const container = els.lists[quadrant];
+      if (!container) return;
+
+      // 更新數量計數
+      if (els.counts[quadrant]) {
+        els.counts[quadrant].textContent = String(zoneTasks.length);
+      }
+
+      // 只有當該卡片「已經處於編輯中（內含 <input>）」時才保留 DOM，避免剛切換進編輯模式時被誤跳過
+      const activeEditInput =
+        state.editingTaskId &&
+        container.querySelector(`input[data-edit-input-for="${CSS.escape(state.editingTaskId)}"]`);
+      const activeEditCard = activeEditInput ? activeEditInput.closest(".task-card") : null;
+
+      if (activeEditCard) {
+        // 只重建或更新非編輯中的相鄰項目，確保輸入框焦點與文字完全不中斷
+        const existingEmpty = container.querySelector(":scope > div:not(.task-card)");
+        if (existingEmpty) existingEmpty.remove();
+
+        const targetIds = new Set(zoneTasks.map((t) => t.id));
+        Array.from(container.children).forEach((child) => {
+          const cid = child.dataset?.taskId;
+          if (cid && cid !== state.editingTaskId && !targetIds.has(cid)) {
+            child.remove();
+          }
+        });
+
+        let cursorNode = container.firstElementChild;
+        for (const task of zoneTasks) {
+          if (task.id === state.editingTaskId) {
+            if (cursorNode === activeEditCard) {
+              cursorNode = cursorNode.nextElementSibling;
+            } else {
+              container.insertBefore(activeEditCard, cursorNode);
+            }
+            continue;
+          }
+
+          const existingCard = container.querySelector(
+            `[data-task-id="${CSS.escape(task.id)}"]`
+          );
+          const freshCard = createTaskCardElement(task);
+          if (existingCard) {
+            container.replaceChild(freshCard, existingCard);
+          } else {
+            container.insertBefore(freshCard, cursorNode);
+          }
+          refreshIcons(freshCard);
+          cursorNode = freshCard.nextElementSibling;
+        }
+        return;
+      }
+
+      // 一般情況：清空並依序渲染
+      container.innerHTML = "";
+      if (zoneTasks.length === 0) {
+        const emptyEl = createEmptyStateElement(quadrant);
+        container.appendChild(emptyEl);
+        refreshIcons(emptyEl);
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      for (const task of zoneTasks) {
+        fragment.appendChild(createTaskCardElement(task));
+      }
+      container.appendChild(fragment);
+      refreshIcons(container);
+    }
+
+    function renderAll() {
+      // 拖曳進行中不可銷毀 DOM 元素，否則瀏覽器會中止 dragend
+      if (state.draggingTaskId !== null) {
+        state.pendingRender = true;
+        return;
+      }
+
+      const grouped = {
+        Q1: [],
+        Q2: [],
+        Q3: [],
+        Q4: [],
+        staging: [],
+      };
+
+      for (const task of state.tasks) {
+        const target = VALID_QUADRANTS.has(task.quadrant) ? task.quadrant : "staging";
+        grouped[target].push(task);
+      }
+
+      els.totalCountLabel.textContent = `共 ${state.tasks.length} 項任務`;
+
+      for (const quadrant of VALID_QUADRANTS) {
+        renderZone(quadrant, grouped[quadrant]);
+      }
+    }
+
+    // =========================================================================
+    // 8. 資料儲存層（支援 localStorage 本機儲存與 Firestore 雲端同步）
+    // =========================================================================
+    function generateLocalId() {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+      }
+      return `local_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    }
+
+    function loadLocalTasks() {
+      try {
+        const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        const items = parsed
+          .filter((item) => item && typeof item.id === "string" && typeof item.title === "string")
+          .map((item) => ({
+            id: item.id,
+            title: item.title,
+            quadrant: VALID_QUADRANTS.has(item.quadrant) ? item.quadrant : "staging",
+            createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+          }));
+        items.sort((a, b) => getCreatedAtMs(a) - getCreatedAtMs(b));
+        return items;
+      } catch (err) {
+        showError("讀取本機儲存失敗", err?.name || "LOCAL_STORAGE_ERROR");
+        return [];
+      }
+    }
+
+    function saveLocalTasks(tasks) {
+      try {
+        window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(tasks));
+        return true;
+      } catch (err) {
+        showError("寫入本機儲存失敗", err?.name || "LOCAL_STORAGE_ERROR");
+        return false;
+      }
+    }
+
+    async function handleAddTask(rawTitle) {
+      const title = rawTitle.trim();
+      if (!title || !isAppReady()) return false;
+
+      els.confirmAddBtn.disabled = true;
+      try {
+        if (state.storageMode === "local") {
+          const lastMs = state.tasks.length > 0 ? getCreatedAtMs(state.tasks[state.tasks.length - 1]) : 0;
+          const nowMs = Math.max(Date.now(), lastMs + 1);
+          const nextTasks = [
+            ...state.tasks,
+            {
+              id: generateLocalId(),
+              title,
+              quadrant: "staging",
+              createdAt: nowMs,
+            },
+          ];
+          if (!saveLocalTasks(nextTasks)) return false;
+          state.tasks = nextTasks;
+          hideError();
+          renderAll();
+          return true;
+        }
+
+        await addDoc(getTasksCollectionRef(), {
+          title,
+          quadrant: "staging",
+          createdAt: serverTimestamp(),
+        });
+        hideError();
+        return true;
+      } catch (err) {
+        showError("新增任務失敗", err);
+        return false;
+      } finally {
+        els.confirmAddBtn.disabled = false;
+      }
+    }
+
+    async function handleUpdateTaskTitle(taskId, newTitle) {
+      if (!isAppReady()) return;
+      const task = state.tasks.find((t) => t.id === taskId);
+      if (!task) return;
+
+      const prevTitle = task.title;
+      task.title = newTitle;
+      renderAll();
+
+      if (state.storageMode === "local") {
+        if (!saveLocalTasks(state.tasks)) {
+          task.title = prevTitle;
+          renderAll();
+        } else {
+          hideError();
+        }
+        return;
+      }
+
+      try {
+        await updateDoc(getTaskDocRef(taskId), { title: newTitle });
+        hideError();
+      } catch (err) {
+        task.title = prevTitle;
+        renderAll();
+        showError("更新任務標題失敗", err);
+      }
+    }
+
+    async function handleMoveTask(taskId, targetQuadrant) {
+      if (!isAppReady()) return;
+      if (!VALID_QUADRANTS.has(targetQuadrant)) return;
+
+      const task = state.tasks.find((t) => t.id === taskId);
+      if (!task || task.quadrant === targetQuadrant) return;
+
+      const previousQuadrant = task.quadrant;
+      task.quadrant = targetQuadrant;
+      if (state.draggingTaskId === null) {
+        renderAll();
+      } else {
+        state.pendingRender = true;
+      }
+
+      if (state.storageMode === "local") {
+        if (!saveLocalTasks(state.tasks)) {
+          task.quadrant = previousQuadrant;
+          renderAll();
+        } else {
+          hideError();
+        }
+        return;
+      }
+
+      try {
+        await updateDoc(getTaskDocRef(taskId), {
+          quadrant: targetQuadrant,
+        });
+        hideError();
+      } catch (err) {
+        task.quadrant = previousQuadrant;
+        renderAll();
+        showError("移動任務失敗", err);
+      }
+    }
+
+    async function handleDeleteTask(taskId) {
+      if (!isAppReady()) return;
+
+      if (state.editingTaskId === taskId) {
+        state.editingTaskId = null;
+      }
+
+      if (state.storageMode === "local") {
+        const prevTasks = state.tasks;
+        state.tasks = state.tasks.filter((t) => t.id !== taskId);
+        if (!saveLocalTasks(state.tasks)) {
+          state.tasks = prevTasks;
+        } else {
+          hideError();
+        }
+        renderAll();
+        return;
+      }
+
+      try {
+        await deleteDoc(getTaskDocRef(taskId));
+        hideError();
+      } catch (err) {
+        showError("刪除任務失敗", err);
+      }
+    }
+
+    // =========================================================================
+    // 9. 拖曳投放區 (Dropzone) 綁定
+    // =========================================================================
+    function applyDropHighlight(zoneEl, quadrant) {
+      const classes = QUADRANT_META[quadrant]?.dropHighlightClasses || [];
+      zoneEl.classList.add(...classes);
+    }
+
+    function removeDropHighlight(zoneEl, quadrant) {
+      const classes = QUADRANT_META[quadrant]?.dropHighlightClasses || [];
+      zoneEl.classList.remove(...classes);
+    }
+
+    function clearAllDropHighlights() {
+      state.dragCounters.clear();
+      for (const zoneEl of els.dropzones) {
+        const quadrant = zoneEl.dataset.quadrant;
+        removeDropHighlight(zoneEl, quadrant);
+      }
+    }
+
+    function setupDropzones() {
+      for (const zoneEl of els.dropzones) {
+        const quadrant = zoneEl.dataset.quadrant;
+
+        zoneEl.addEventListener("dragenter", (e) => {
+          if (!isAppReady() || !state.draggingTaskId) return;
+          e.preventDefault();
+          const nextCount = (state.dragCounters.get(quadrant) || 0) + 1;
+          state.dragCounters.set(quadrant, nextCount);
+          if (nextCount === 1) {
+            applyDropHighlight(zoneEl, quadrant);
+          }
+        });
+
+        zoneEl.addEventListener("dragover", (e) => {
+          if (!isAppReady() || !state.draggingTaskId) return;
+          e.preventDefault();
+          if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = "move";
+          }
+        });
+
+        zoneEl.addEventListener("dragleave", () => {
+          const current = state.dragCounters.get(quadrant) || 0;
+          const next = Math.max(0, current - 1);
+          state.dragCounters.set(quadrant, next);
+          if (next === 0) {
+            removeDropHighlight(zoneEl, quadrant);
+          }
+        });
+
+        zoneEl.addEventListener("drop", async (e) => {
+          e.preventDefault();
+          clearAllDropHighlights();
+
+          if (!isAppReady()) return;
+          const droppedTaskId =
+            state.draggingTaskId || e.dataTransfer?.getData("text/plain");
+          if (!droppedTaskId) return;
+
+          state.draggingTaskId = null;
+          state.pendingRender = false;
+          await handleMoveTask(droppedTaskId, quadrant);
+          renderAll();
+        });
+      }
+    }
+
+    // =========================================================================
+    // 10. 新增表單與 UI 事件綁定
+    // =========================================================================
+    function openAddForm() {
+      if (!isAppReady()) return;
+      els.addTaskForm.classList.remove("hidden");
+      els.newTaskInput.value = "";
+      els.newTaskInput.focus();
+    }
+
+    function closeAddForm() {
+      els.addTaskForm.classList.add("hidden");
+      els.newTaskInput.value = "";
+    }
+
+    function setupUIEvents() {
+      els.dismissErrorBtn.addEventListener("click", hideError);
+
+      els.openAddFormBtn.addEventListener("click", () => {
+        if (els.addTaskForm.classList.contains("hidden")) {
+          openAddForm();
+        } else {
+          els.newTaskInput.focus();
+        }
+      });
+
+      els.cancelAddBtn.addEventListener("click", closeAddForm);
+
+      els.newTaskInput.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeAddForm();
+        }
+      });
+
+      els.addTaskForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const value = els.newTaskInput.value.trim();
+        if (!value) {
+          els.newTaskInput.focus();
+          return;
+        }
+        const ok = await handleAddTask(value);
+        if (ok) {
+          els.newTaskInput.value = "";
+          els.newTaskInput.focus();
+        }
+      });
+
+      els.copyUidBtn.addEventListener("click", async () => {
+        if (!state.user?.uid) return;
+        try {
+          await navigator.clipboard.writeText(state.user.uid);
+          const icon = els.copyUidBtn.querySelector("i, svg");
+          if (icon) {
+            const checkIcon = document.createElement("i");
+            checkIcon.setAttribute("data-lucide", "check");
+            checkIcon.className = "w-3 h-3 text-emerald-600";
+            icon.replaceWith(checkIcon);
+            refreshIcons(els.copyUidBtn);
+            setTimeout(() => {
+              const curr = els.copyUidBtn.querySelector("i, svg");
+              if (curr) {
+                const copyIcon = document.createElement("i");
+                copyIcon.setAttribute("data-lucide", "copy");
+                copyIcon.className = "w-3 h-3";
+                curr.replaceWith(copyIcon);
+                refreshIcons(els.copyUidBtn);
+              }
+            }, 1500);
+          }
+        } catch {
+          // 忽略剪貼簿權限錯誤
+        }
+      });
+    }
+
+    // =========================================================================
+    // 10.5 四象限標題與行動標籤自訂編輯（儲存於 localStorage）
+    // =========================================================================
+    function loadQuadrantLabels() {
+      const next = structuredClone(DEFAULT_QUADRANT_LABELS);
+      try {
+        const raw = window.localStorage.getItem(QUADRANT_LABELS_STORAGE_KEY);
+        if (!raw) return next;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return next;
+        for (const q of ["Q1", "Q2", "Q3", "Q4"]) {
+          if (parsed[q] && typeof parsed[q] === "object") {
+            for (const field of ["code", "title", "action"]) {
+              if (typeof parsed[q][field] === "string" && parsed[q][field].trim()) {
+                next[q][field] = parsed[q][field].trim();
+              }
+            }
+          }
+        }
+      } catch {
+        // 忽略本機讀取錯誤並使用預設標籤
+      }
+      return next;
+    }
+
+    function saveQuadrantLabels() {
+      try {
+        window.localStorage.setItem(
+          QUADRANT_LABELS_STORAGE_KEY,
+          JSON.stringify(state.quadrantLabels)
+        );
+      } catch (err) {
+        showError("儲存象限標籤失敗", err?.name || "LOCAL_STORAGE_ERROR");
+      }
+    }
+
+    function renderQuadrantLabels() {
+      const labelEls = document.querySelectorAll("[data-label-quadrant][data-label-field]");
+      for (const el of labelEls) {
+        if (el.dataset.isEditing === "true") continue;
+        const q = el.dataset.labelQuadrant;
+        const field = el.dataset.labelField;
+        const text = state.quadrantLabels[q]?.[field];
+        if (typeof text === "string") {
+          el.textContent = text;
+        }
+      }
+    }
+
+    function startQuadrantLabelEdit(el) {
+      if (el.dataset.isEditing === "true") return;
+      const q = el.dataset.labelQuadrant;
+      const field = el.dataset.labelField;
+      const currentValue = state.quadrantLabels[q]?.[field] ?? el.textContent.trim();
+
+      el.dataset.isEditing = "true";
+      const hadTruncate = el.classList.contains("truncate");
+      if (hadTruncate) {
+        el.classList.remove("truncate");
+      }
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = field === "code" ? 12 : field === "action" ? 20 : 40;
+      input.value = currentValue;
+      input.setAttribute("aria-label", "編輯象限標籤");
+
+      const widthClass =
+        field === "code"
+          ? "w-14 font-mono text-xs font-semibold"
+          : field === "action"
+          ? "w-24 text-xs font-medium"
+          : "w-36 sm:w-44 text-sm font-semibold";
+      input.className = `${widthClass} px-1.5 py-0.5 text-slate-900 bg-white border border-slate-400 rounded focus:outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10`;
+
+      el.textContent = "";
+      el.appendChild(input);
+      input.focus();
+      input.select();
+
+      let finished = false;
+      const finishEdit = (shouldSave) => {
+        if (finished) return;
+        finished = true;
+
+        const trimmed = input.value.trim();
+        const nextValue = shouldSave && trimmed ? trimmed : currentValue;
+        if (state.quadrantLabels[q]) {
+          state.quadrantLabels[q][field] = nextValue;
+        }
+        delete el.dataset.isEditing;
+        if (hadTruncate) {
+          el.classList.add("truncate");
+        }
+        el.textContent = nextValue;
+
+        if (shouldSave && trimmed && trimmed !== currentValue) {
+          saveQuadrantLabels();
+        }
+      };
+
+      input.addEventListener("click", (e) => e.stopPropagation());
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finishEdit(true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          finishEdit(false);
+        }
+      });
+      input.addEventListener("blur", () => finishEdit(true));
+    }
+
+    function setupEditableQuadrantLabels() {
+      state.quadrantLabels = loadQuadrantLabels();
+      renderQuadrantLabels();
+
+      const labelEls = document.querySelectorAll("[data-label-quadrant][data-label-field]");
+      for (const el of labelEls) {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          startQuadrantLabelEdit(el);
+        });
+        el.addEventListener("keydown", (e) => {
+          if (e.target !== el) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            startQuadrantLabelEdit(el);
+          }
+        });
+      }
+
+      window.addEventListener("storage", (e) => {
+        if (e.key === QUADRANT_LABELS_STORAGE_KEY) {
+          state.quadrantLabels = loadQuadrantLabels();
+          renderQuadrantLabels();
+        }
+      });
+    }
+
+    // =========================================================================
+    // 11. Firebase 初始化、匿名登入與即時監聽
+    // =========================================================================
+    function resolveFirebaseConfig() {
+      // 支援注入環境變數（若有）或使用頂端 MANUAL_FIREBASE_CONFIG
+      if (typeof window.__app_id === "string" && window.__app_id.trim()) {
+        state.appId = window.__app_id.trim();
+      } else {
+        state.appId = DEFAULT_APP_ID;
+      }
+
+      if (typeof window.__firebase_config !== "undefined" && window.__firebase_config) {
+        try {
+          const parsed =
+            typeof window.__firebase_config === "string"
+              ? JSON.parse(window.__firebase_config)
+              : window.__firebase_config;
+          if (parsed && parsed.apiKey && parsed.projectId) {
+            return parsed;
+          }
+        } catch (err) {
+          console.warn("解析 __firebase_config 失敗，改用 MANUAL_FIREBASE_CONFIG", err);
+        }
+      }
+
+      return MANUAL_FIREBASE_CONFIG;
+    }
+
+    function subscribeToTasks() {
+      if (state.unsubscribeSnapshot) {
+        state.unsubscribeSnapshot();
+        state.unsubscribeSnapshot = null;
+      }
+
+      state.isLoadingTasks = true;
+      renderAll();
+
+      const q = query(getTasksCollectionRef(), orderBy("createdAt", "asc"));
+
+      state.unsubscribeSnapshot = onSnapshot(
+        q,
+        (snapshot) => {
+          state.isLoadingTasks = false;
+          const items = snapshot.docs.map((docSnap) => {
+            const data = docSnap.data({ serverTimestamps: "estimate" });
+            return {
+              id: docSnap.id,
+              title: typeof data.title === "string" ? data.title : "",
+              quadrant: VALID_QUADRANTS.has(data.quadrant) ? data.quadrant : "staging",
+              createdAt: data.createdAt || null,
+            };
+          });
+
+          // 二次排序：確保尚未收到伺服器時間戳的本地樂觀寫入項目維持依建立順序由舊到新
+          items.sort((a, b) => getCreatedAtMs(a) - getCreatedAtMs(b));
+          state.tasks = items;
+          setConnectionStatus("connected", "即時同步中");
+          renderAll();
+        },
+        (error) => {
+          state.isLoadingTasks = false;
+          setConnectionStatus("error", "資料同步失敗");
+          showError("Firestore 即時監聽發生錯誤", error);
+          renderAll();
+        }
+      );
+    }
+
+    function initLocalStorageMode() {
+      state.storageMode = "local";
+      state.user = null;
+      state.isAuthReady = true;
+      state.isLoadingTasks = false;
+      state.tasks = loadLocalTasks();
+
+      els.userIdDisplay.textContent = "本機瀏覽器";
+      els.userIdDisplay.title = "資料儲存於目前瀏覽器的 localStorage";
+      els.copyUidBtn.classList.add("hidden");
+      setInteractiveEnabled(true);
+      setConnectionStatus("local", "本機儲存模式 (localStorage)");
+      renderAll();
+
+      // 同一瀏覽器多分頁開啟時自動同步
+      window.addEventListener("storage", (e) => {
+        if (state.storageMode === "local" && e.key === LOCAL_STORAGE_KEY) {
+          state.tasks = loadLocalTasks();
+          renderAll();
+        }
+      });
+    }
+
+    async function initStorage() {
+      const config = resolveFirebaseConfig();
+
+      // 未填入 Firebase 設定時，自動啟用 localStorage 本機儲存模式
+      if (!config || !config.apiKey || !config.projectId || !config.appId) {
+        initLocalStorageMode();
+        return;
+      }
+
+      state.storageMode = "firebase";
+      try {
+        const app = initializeApp(config);
+        state.auth = getAuth(app);
+        state.db = getFirestore(app);
+
+        onAuthStateChanged(state.auth, (user) => {
+          if (user) {
+            state.user = user;
+            state.isAuthReady = true;
+            els.userIdDisplay.textContent = user.uid;
+            els.userIdDisplay.title = user.uid;
+            els.copyUidBtn.classList.remove("hidden");
+            setInteractiveEnabled(true);
+            setConnectionStatus("loading", "同步資料中...");
+            subscribeToTasks();
+          } else {
+            state.user = null;
+            state.isAuthReady = false;
+            els.userIdDisplay.textContent = "未登入";
+            els.userIdDisplay.title = "";
+            els.copyUidBtn.classList.add("hidden");
+            setInteractiveEnabled(false);
+            if (state.unsubscribeSnapshot) {
+              state.unsubscribeSnapshot();
+              state.unsubscribeSnapshot = null;
+            }
+          }
+        });
+
+        setConnectionStatus("loading", "正在匿名登入...");
+        if (typeof window.__initial_auth_token === "string" && window.__initial_auth_token) {
+          await signInWithCustomToken(state.auth, window.__initial_auth_token);
+        } else {
+          await signInAnonymously(state.auth);
+        }
+      } catch (err) {
+        state.isAuthReady = false;
+        state.isLoadingTasks = false;
+        setInteractiveEnabled(false);
+        setConnectionStatus("error", "匿名登入失敗");
+        showError("Firebase 初始化或匿名登入失敗", err);
+        renderAll();
+      }
+    }
+
+    // =========================================================================
+    // 12. 啟動應用程式
+    // =========================================================================
+    refreshIcons();
+    setupEditableQuadrantLabels();
+    setupDropzones();
+    setupUIEvents();
+    renderAll();
+    initStorage();
+  </script>
+</body>
+</html>

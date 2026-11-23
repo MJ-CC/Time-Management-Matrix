@@ -1,0 +1,6 @@
+{
+  "name": "時間矩陣待辦事項",
+  "description": "基於艾森豪威爾四象限法則的即時同步時間矩陣待辦事項網頁應用程式，支援拖曳分類、行內編輯與 Firebase 匿名登入雲端同步。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
